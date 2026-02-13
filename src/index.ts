@@ -355,33 +355,6 @@ server.tool(
   }
 );
 
-server.tool(
-  "spider_crawl_state",
-  "Get the current state of a crawl job.",
-  {
-    url: z.string().describe("The URL of the crawl job to check"),
-  },
-  async (params) => {
-    const data = await apiRequest("POST", "/data/crawl_state", params as Record<string, unknown>);
-    return { content: [{ type: "text" as const, text: formatResult(data) }] };
-  }
-);
-
-server.tool(
-  "spider_query",
-  "Query previously stored crawl data. Search by URL, domain, or pathname.",
-  {
-    url: z.string().optional().describe("Exact URL path to query"),
-    domain: z.string().optional().describe("Website domain to query (e.g. 'spider.cloud')"),
-    pathname: z.string().optional().describe("Website pathname to query (e.g. '/about')"),
-    limit: z.number().optional().describe("Max results to return"),
-    page: z.number().optional().describe("Page number for pagination"),
-  },
-  async (params) => {
-    const data = await apiRequest("POST", "/data/query", params as Record<string, unknown>, { stream: true });
-    return { content: [{ type: "text" as const, text: formatResult(data) }] };
-  }
-);
 
 // === AI Tools (Subscription Required) ===
 
