@@ -214,7 +214,7 @@ const scrapeParams = { ...scrapeBase, ...screenshotExtraParams };
 
 const server = new McpServer({
   name: "spider-cloud-mcp",
-  version: "1.2.0",
+  version: "1.2.1",
 });
 
 // === Core Tools ===
