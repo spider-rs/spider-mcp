@@ -72,8 +72,6 @@ Add to your Cursor MCP settings:
 | `spider_unblocker` | Access bot-protected content with anti-bot bypass |
 | `spider_transform` | Transform HTML to markdown/text/other formats |
 | `spider_get_credits` | Check your credit balance |
-| `spider_crawl_state` | Check crawl job status |
-| `spider_query` | Query previously stored crawl data |
 
 ### AI Tools (Subscription Required)
 
