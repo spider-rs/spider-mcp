@@ -1,6 +1,6 @@
 {
   "name": "spider-cloud-mcp",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "MCP server for the Spider web crawling and scraping API — crawl, scrape, search, and extract web data for AI agents, RAG pipelines, and LLMs.",
   "type": "module",
   "main": "dist/index.js",

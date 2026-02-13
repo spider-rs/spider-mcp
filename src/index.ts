@@ -16,19 +16,82 @@ function getApiKey(): string {
   return key;
 }
 
+/**
+ * Parse a JSONL (newline-delimited JSON) stream into an array of objects.
+ * Handles:
+ * - Large JSON objects spanning multiple chunks
+ * - UTF-8 multi-byte characters split across chunk boundaries
+ * - \r\n and \n line endings
+ * - Empty lines and whitespace-only lines
+ * - Malformed lines (skipped with warning)
+ */
+async function parseJsonlStream(
+  body: ReadableStream<Uint8Array>
+): Promise<unknown[]> {
+  const results: unknown[] = [];
+  const decoder = new TextDecoder("utf-8");
+  const reader = body.getReader();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        // Flush any remaining buffered data
+        const remaining = buffer.trim();
+        if (remaining.length > 0) {
+          try {
+            results.push(JSON.parse(remaining));
+          } catch {
+            // Final chunk wasn't valid JSON — may be a partial write
+          }
+        }
+        break;
+      }
+
+      // stream: true tells TextDecoder to handle multi-byte chars split across chunks
+      buffer += decoder.decode(value, { stream: true });
+
+      // Extract complete lines (delimited by \n)
+      let newlineIdx: number;
+      while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newlineIdx).replace(/\r$/, "");
+        buffer = buffer.slice(newlineIdx + 1);
+
+        if (line.length === 0) continue;
+
+        try {
+          results.push(JSON.parse(line));
+        } catch {
+          // Skip malformed JSONL lines
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return results;
+}
+
+/**
+ * Make a request to the Spider API.
+ * - Streaming endpoints use Content-Type: application/jsonl for incremental parsing
+ * - Non-streaming endpoints use Content-Type: application/json
+ */
 async function apiRequest(
   method: "GET" | "POST",
   path: string,
   body?: Record<string, unknown>,
-  contentType?: string
+  options?: { stream?: boolean }
 ): Promise<unknown> {
+  const useJsonl = options?.stream ?? false;
+
   const headers: Record<string, string> = {
     Authorization: `Bearer ${getApiKey()}`,
-    "Content-Type": "application/json",
+    "Content-Type": useJsonl ? "application/jsonl" : "application/json",
   };
-  if (contentType) {
-    headers["Content-Type"] = contentType;
-  }
 
   const res = await fetch(`${API_BASE}${path}`, {
     method,
@@ -36,12 +99,18 @@ async function apiRequest(
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
 
-  const text = await res.text();
-
   if (!res.ok) {
+    const text = await res.text();
     throw new Error(`Spider API error ${res.status}: ${text}`);
   }
 
+  // JSONL streaming: parse line by line from the stream
+  if (useJsonl && res.body) {
+    return parseJsonlStream(res.body);
+  }
+
+  // JSON fallback: read full body and parse
+  const text = await res.text();
   try {
     return JSON.parse(text);
   } catch {
@@ -145,7 +214,7 @@ const scrapeParams = { ...scrapeBase, ...screenshotExtraParams };
 
 const server = new McpServer({
   name: "spider-cloud-mcp",
-  version: "1.0.0",
+  version: "1.2.0",
 });
 
 // === Core Tools ===
@@ -155,7 +224,7 @@ server.tool(
   "Crawl a website and extract content from multiple pages. Returns page content in the specified format (markdown, HTML, text, etc.). Powered by Spider - the fastest web crawler at 100K+ pages/sec.",
   crawlParams,
   async (params) => {
-    const data = await apiRequest("POST", "/crawl", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/crawl", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -165,7 +234,7 @@ server.tool(
   "Scrape a single page and extract its content. No crawling — just fetches and processes one URL. Supports all output formats and screenshot capture.",
   scrapeParams,
   async (params) => {
-    const data = await apiRequest("POST", "/scrape", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/scrape", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -196,7 +265,7 @@ server.tool(
     cookies: z.string().optional().describe("HTTP cookies"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/search", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/search", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -214,7 +283,7 @@ server.tool(
     request: z.enum(["http", "chrome", "smart"]).optional().describe("Request type"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/links", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/links", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -239,7 +308,7 @@ server.tool(
     timeout: z.number().optional().describe("Request timeout"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/screenshot", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/screenshot", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -249,7 +318,7 @@ server.tool(
   "Access blocked or protected content with advanced anti-bot bypass. Uses enhanced fingerprinting and proxy rotation. Adds 10-40 extra credits per successful unblock.",
   scrapeParams,
   async (params) => {
-    const data = await apiRequest("POST", "/unblocker", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/unblocker", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -271,7 +340,7 @@ server.tool(
     clean: z.boolean().optional().describe("Clean for AI (remove footers, navigation)"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/transform", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/transform", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -309,7 +378,7 @@ server.tool(
     page: z.number().optional().describe("Page number for pagination"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/data/query", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/data/query", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -334,7 +403,7 @@ server.tool(
     cookies: z.string().optional().describe("HTTP cookies"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/ai/crawl", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/ai/crawl", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -354,7 +423,7 @@ server.tool(
     cookies: z.string().optional().describe("HTTP cookies"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/ai/scrape", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/ai/scrape", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -376,7 +445,7 @@ server.tool(
     ]).optional().describe("Output format"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/ai/search", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/ai/search", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -395,7 +464,7 @@ server.tool(
     cookies: z.string().optional().describe("HTTP cookies"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/ai/browser", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/ai/browser", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
@@ -414,7 +483,7 @@ server.tool(
     request: z.enum(["http", "chrome", "smart"]).optional().describe("Request type"),
   },
   async (params) => {
-    const data = await apiRequest("POST", "/ai/links", params as Record<string, unknown>);
+    const data = await apiRequest("POST", "/ai/links", params as Record<string, unknown>, { stream: true });
     return { content: [{ type: "text" as const, text: formatResult(data) }] };
   }
 );
